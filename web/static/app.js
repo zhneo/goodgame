@@ -1,4 +1,4 @@
-/* bcc spec — фронтенд без сборки. Всё, что пришло от LLM или из файла, выводится только как текст (h()). */
+/* Проверка ТЗ — фронтенд без сборки. Всё, что пришло от LLM или из файла, выводится только как текст (h()). */
 'use strict';
 
 // ------------------------------------------------------------------ утилиты
@@ -97,7 +97,7 @@ function plural(n, one, few, many) {
   const a = Math.abs(n) % 100, b = a % 10;
   if (a > 10 && a < 20) return many; if (b > 1 && b < 5) return few; if (b === 1) return one; return many;
 }
-function setTitle(t) { document.title = t ? `${t} — bcc spec` : 'bcc spec — проверка ТЗ'; }
+function setTitle(t) { document.title = t ? `${t} — Проверка ТЗ` : 'Проверка ТЗ — Банк ЦентрКредит'; }
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); toast('Скопировано'); }
   catch { const ta = h('textarea', { style: { position: 'fixed', opacity: '0' } }, text); document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove(); toast('Скопировано'); }

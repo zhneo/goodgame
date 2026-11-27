@@ -33,7 +33,7 @@ KNOWN_UNAVAILABLE_MODELS = {"gemini-3-flash-preview", "gemini-2.5-flash-lite"}
 def allowed_models() -> list[str]:
     return [item.strip() for item in os.getenv("LLM_ALLOWED_MODELS", ",".join(DEFAULT_MODELS)).split(",")
             if item.strip() and item.strip() not in KNOWN_UNAVAILABLE_MODELS]
-app = FastAPI(title="bcc spec — проверка ТЗ", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
+app = FastAPI(title="Проверка ТЗ — Банк ЦентрКредит", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 
 # Защита паролем для стенда: APP_BASIC_AUTH="user:password". Без неё любой, кто знает адрес,
@@ -81,7 +81,7 @@ async def _basic_auth(request, call_next):
         if secrets.compare_digest(given.encode(), _BASIC_AUTH.encode()):
             return await call_next(request)
     return Response("Требуется вход", status_code=401,
-                    headers={"WWW-Authenticate": 'Basic realm="bcc spec"', **SECURITY_HEADERS})
+                    headers={"WWW-Authenticate": 'Basic realm="Проверка ТЗ"', **SECURITY_HEADERS})
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -434,7 +434,7 @@ def spa(path: str, request: Request):
 
 
 NOT_FOUND_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1"><title>Страница не найдена — bcc spec</title></head>
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Страница не найдена — Проверка ТЗ</title></head>
 <body style="font-family:Arial,sans-serif;background:#F3F6F5;color:#141414;margin:0;padding:64px 24px">
-<h1>Страница не найдена</h1><p>Такого адреса в сервисе нет.</p><p><a href="{home}" style="color:#007A55">На главную bcc spec</a></p>
+<h1>Страница не найдена</h1><p>Такого адреса в сервисе нет.</p><p><a href="{home}" style="color:#007A55">На главную</a></p>
 </body></html>"""
