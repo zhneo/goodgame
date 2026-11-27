@@ -324,7 +324,7 @@ class RunStore:
         if not up:
             raise KeyError("upload")
         run = Run(id=uuid.uuid4().hex[:10], upload_id=upload_id, title=title or up.preview.get("title") or up.file_name,
-                  file_name=up.file_name, options=options, gitlab_project=gitlab_project)
+                  file_name=up.file_name, options=options, gitlab_project=gitlab_project, mode=pipeline_mode())
         with self._lock:
             self.runs[run.id] = run
         self.persist(run)
@@ -425,6 +425,8 @@ class RunStore:
             run.result = result
             base_report = (report_md.render(result) if result["partial"] else
                            result.get("report_markdown") or _agent_report(result) or report_md.render(result))
+            # Путь хранилища загрузок — внутренняя деталь сервера; в отчёте достаточно имени файла.
+            base_report = base_report.replace(str(path), run.file_name).replace(path.as_posix(), run.file_name)
             run.report_md = _with_reviewer_decisions(_with_changes(base_report, result.get("changes", {})), run.decisions)
             run.warnings.extend(w for w in result.get("warnings", []) if w not in run.warnings)
             if result.get("partial"):

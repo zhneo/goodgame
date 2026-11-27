@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import re
 import threading
 import time
@@ -15,6 +16,8 @@ from typing import Any
 from urllib.parse import quote, urlparse
 
 import httpx
+
+log = logging.getLogger("web.gitlab")
 
 TIMEOUT = httpx.Timeout(15.0, connect=10.0)
 MAX_TREE = 8000
@@ -71,8 +74,12 @@ class GitLabClient:
     def _get(self, path: str, params: dict | None = None, raw: bool = False) -> Any:
         try:
             r = httpx.get(self.api + path, params=params, headers={"PRIVATE-TOKEN": self._token}, timeout=TIMEOUT)
+        except httpx.TimeoutException as e:
+            raise GitLabError("network", "GitLab не ответил вовремя. Повторите позже или проверьте адрес.") from e
         except httpx.HTTPError as e:
-            raise GitLabError("network", f"GitLab недоступен: {e.__class__.__name__}") from e
+            log.warning("GitLab %s: %r", self.base_url, e)
+            raise GitLabError("network", "Не удалось подключиться к GitLab по этому адресу. "
+                                         "Проверьте адрес и доступ к серверу из сети сервиса.") from e
         if r.status_code == 401:
             raise GitLabError("unauthorized", "Токен недействителен или истёк", 401)
         if r.status_code == 403:
@@ -247,7 +254,8 @@ class GitLabStore:
         except GitLabError as e:
             proj.status, proj.error = "error", e.message
         except Exception as e:  # noqa: BLE001
-            proj.status, proj.error = "error", f"Ошибка индексации: {e.__class__.__name__}"
+            log.exception("индексация проекта %s", proj.path)
+            proj.status, proj.error = "error", "Не удалось проиндексировать проект — нажмите «Обновить» или повторите позже"
 
     def remove_project(self, project_id: str) -> None:
         with self._lock:

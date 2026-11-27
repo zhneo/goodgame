@@ -81,7 +81,7 @@ def read_document(path: Path) -> ReadResult:
         format=fmt,
         pages=pages,
         tables=count_md_tables(text),
-        title=(docx_title or path.stem) if fmt == "docx" else guess_title(text, path.stem),
+        title=(docx_title or guess_title(text, path.stem)) if fmt == "docx" else guess_title(text, path.stem),
         req_markers=list(dict.fromkeys(REQ_MARKER_RE.findall(text))),
         shall_count=len(SHALL_RE.findall(text)),
     )

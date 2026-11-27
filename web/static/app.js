@@ -173,13 +173,18 @@ async function route() {
     const m = hash.match(re);
     if (m) {
       document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.dataset.nav === nav));
-      document.querySelectorAll('[data-nav]').forEach((a) => a.toggleAttribute('aria-current', a.dataset.nav === nav));
+      document.querySelectorAll('[data-nav]').forEach((a) => {
+        if (a.dataset.nav === nav) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+      });
+      setTitle('');
       $app.replaceChildren();
       await fn(m);
       return;
     }
   }
-  location.hash = '#/';
+  // Неизвестный адрес: честный экран «не найдено», история браузера не переписывается.
+  document.querySelectorAll('[data-nav]').forEach((a) => { a.classList.remove('on'); a.removeAttribute('aria-current'); });
+  render(notFound('Раздел не найден', 'Такого адреса в сервисе нет. Проверьте ссылку или начните с главной.'));
 }
 function render(...nodes) { fill($app, nodes); }
 window.addEventListener('hashchange', () => { route(); window.scrollTo(0, 0); });
@@ -483,12 +488,18 @@ function drawReview(run) {
   const text = err ? 'Конвейер не смог завершить проверку. Ниже — что случилось и что можно сделать.'
     : cancelled ? 'Проверку остановили. Можно запустить её заново с теми же настройками.'
       : 'Можно закрыть вкладку — проверка продолжится, отчёт появится в истории.';
+  const mins = Math.max(0, Math.floor((Date.now() / 1000 - run.created_at) / 60));
+  const timing = err || cancelled ? null
+    : run.status === 'queued'
+      ? (run.queue_position ? `В очереди: перед этой проверкой ${run.queue_position} ${plural(run.queue_position, 'другая', 'других', 'других')}. Одновременно идут ${run.queue_workers || 2} ${plural(run.queue_workers || 2, 'проверка', 'проверки', 'проверок')}.` : 'В очереди — начнётся, как только освободится место.')
+      : `Идёт ${mins ? mins + ' мин' : 'меньше минуты'}. Документ на 5–15 требований агент проверяет обычно за 5–10 минут, большой — дольше.`;
 
   const left = h('div', { class: 'col-left', style: { gap: '24px' } },
     h('span', { class: 'greenbar' }),
     h('span', { class: 'eyebrow grey' }, [run.file_name, run.gitlab ? run.gitlab.path : null].filter(Boolean).join(' · ')),
     h('h1', { class: 'display' }, title),
     h('p', { class: 'lead' }, text),
+    timing ? h('p', { class: 'small muted', role: 'status' }, timing) : null,
     h('div', { class: 'bignum' }, h('b', null, String(found)), h('span', { class: 'muted' }, 'замечаний уже на полях')),
     h('div', { class: 'bar', role: 'progressbar', 'aria-valuenow': run.progress, 'aria-valuemin': 0, 'aria-valuemax': 100, 'aria-label': 'Прогресс проверки', style: { maxWidth: '480px' } },
       h('span', { style: { width: `${run.progress}%` } })),
@@ -1183,6 +1194,7 @@ async function viewGitlab() {
 }
 
 function notFound(title, text) {
+  setTitle(title);
   return h('div', { class: 'wrap stack' }, h('div', { class: 'paper card', style: { maxWidth: '720px' } },
     h('b', { style: { fontSize: '28px' } }, title), h('span', { class: 'muted' }, text),
     h('div', { class: 'row' }, h('a', { class: 'btn', href: '#/' }, 'Проверить ТЗ'), h('a', { class: 'btn-ghost', href: '#/history' }, 'История'))));

@@ -1,16 +1,18 @@
 """FastAPI: тонкая обёртка над конвейером агента + подключение GitLab + раздача фронтенда."""
 from __future__ import annotations
 
+import html
 import logging
 import os
 import re
 from pathlib import Path
 from urllib.parse import quote
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import __version__
 from .criteria import catalog
@@ -34,8 +36,34 @@ def allowed_models() -> list[str]:
 app = FastAPI(title="bcc spec — проверка ТЗ", version=__version__, docs_url="/api/docs", openapi_url="/api/openapi.json")
 
 
-# Необязательная защита паролем для публичного стенда: APP_BASIC_AUTH="user:password".
+# Защита паролем для стенда: APP_BASIC_AUTH="user:password". Без неё любой, кто знает адрес,
+# видит, меняет и удаляет все загруженные ТЗ — на общедоступном стенде её нужно задать обязательно.
 _BASIC_AUTH = os.getenv("APP_BASIC_AUTH", "")
+if not _BASIC_AUTH:
+    log.warning("APP_BASIC_AUTH не задан: сервис открыт без входа. Для стенда задайте APP_BASIC_AUTH=user:password")
+
+# Заголовки безопасности: работают и без nginx (локально, в Docker).
+SECURITY_HEADERS = {
+    "Content-Security-Policy": ("default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+                                "img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; "
+                                "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"),
+    "X-Frame-Options": "DENY",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+}
+
+
+@app.middleware("http")
+async def _security_headers(request, call_next):
+    response = await call_next(request)
+    for k, v in SECURITY_HEADERS.items():
+        if k == "Content-Security-Policy" and request.url.path == "/api/docs":
+            continue  # Swagger UI грузит скрипты с CDN
+        response.headers.setdefault(k, v)
+    if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return response
 
 
 @app.middleware("http")
@@ -52,7 +80,8 @@ async def _basic_auth(request, call_next):
             given = ""
         if secrets.compare_digest(given.encode(), _BASIC_AUTH.encode()):
             return await call_next(request)
-    return Response("Требуется вход", status_code=401, headers={"WWW-Authenticate": 'Basic realm="bcc spec"'})
+    return Response("Требуется вход", status_code=401,
+                    headers={"WWW-Authenticate": 'Basic realm="bcc spec"', **SECURITY_HEADERS})
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -62,6 +91,28 @@ def healthz():
 
 def err(status: int, code: str, message: str, hint: str = "") -> JSONResponse:
     return JSONResponse(status_code=status, content={"code": code, "message": message, "hint": hint})
+
+
+FIELD_RU = {"file": "файл", "upload_id": "загруженный файл", "decision": "решение", "comment": "комментарий",
+            "url": "адрес GitLab", "token": "токен", "title": "название", "connection_id": "подключение GitLab",
+            "gitlab_id": "проект GitLab"}
+
+
+@app.exception_handler(RequestValidationError)
+async def _validation_error(_, e: RequestValidationError):
+    """Ошибки валидации — тем же форматом {code, message, hint}, по-русски и без внутренностей pydantic."""
+    first = (e.errors() or [{}])[0]
+    kind, field = first.get("type", ""), str((first.get("loc") or ["", ""])[-1])
+    name = FIELD_RU.get(field, field)
+    if kind == "json_invalid":
+        message = "Тело запроса — некорректный JSON"
+    elif kind == "missing":
+        message = f"Не передано обязательное поле: {name}"
+    elif kind == "string_too_long":
+        message = f"Слишком длинное значение: {name} (не больше {first.get('ctx', {}).get('max_length')} символов)"
+    else:
+        message = f"Неверное значение: {name}"
+    return err(422, "validation", message)
 
 
 @app.exception_handler(GitLabError)
@@ -134,8 +185,8 @@ def get_upload(upload_id: str):
 # ---------------------------------------------------------------- проверки
 
 class RunIn(BaseModel):
-    upload_id: str
-    title: str = ""
+    upload_id: str = Field(max_length=64)
+    title: str = Field("", max_length=300)
     work_type: str = "Новый функционал"
     criteria: list[str] = []
     gitlab_project_id: str | None = None
@@ -200,7 +251,13 @@ def _run(run_id: str):
 
 @app.get("/api/runs/{run_id}")
 def get_run(run_id: str):
-    return _run(run_id).public()
+    run = _run(run_id)
+    data = run.public()
+    if run.status == "queued":
+        # Сколько проверок ждёт впереди: экран ревью показывает это вместо обещаний по времени.
+        data["queue_position"] = sum(1 for r in runs.list() if r.status == "queued" and r.created_at < run.created_at)
+        data["queue_workers"] = int(os.getenv("WEB_WORKERS", "2"))
+    return data
 
 
 @app.get("/api/runs/{run_id}/result")
@@ -252,13 +309,13 @@ def delete_run(run_id: str):
 # ---------------------------------------------------------------- GitLab (только чтение)
 
 class ConnIn(BaseModel):
-    url: str
-    token: str
+    url: str = Field(max_length=500)
+    token: str = Field(max_length=500)
 
 
 class DecisionIn(BaseModel):
-    decision: str
-    comment: str = ""
+    decision: str = Field(max_length=20)
+    comment: str = Field("", max_length=2000)
 
 
 @app.post("/api/runs/{run_id}/findings/{finding_id}/decision")
@@ -366,7 +423,18 @@ app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 
 @app.api_route("/{path:path}", methods=["GET", "HEAD"], include_in_schema=False)
-def spa(path: str):
+def spa(path: str, request: Request):
+    """Маршруты фронтенда — в hash (#/history), поэтому страница одна. Остальные пути — честный 404."""
     if path.startswith("api/"):
         raise HTTPException(404, "Нет такого метода API")
+    if path not in ("", "index.html"):
+        home = html.escape((request.headers.get("x-forwarded-prefix") or "").rstrip("/") + "/")
+        return HTMLResponse(NOT_FOUND_HTML.replace("{home}", home), status_code=404)
     return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+NOT_FOUND_HTML = """<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Страница не найдена — bcc spec</title></head>
+<body style="font-family:Arial,sans-serif;background:#F3F6F5;color:#141414;margin:0;padding:64px 24px">
+<h1>Страница не найдена</h1><p>Такого адреса в сервисе нет.</p><p><a href="{home}" style="color:#007A55">На главную bcc spec</a></p>
+</body></html>"""
